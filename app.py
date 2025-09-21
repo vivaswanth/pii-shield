@@ -292,6 +292,6 @@ def run_streamlit_ui():
 # ---------------- Run ----------------
 if __name__ == "__main__":
     # Run FastAPI in a separate thread
-    threading.Thread(target=lambda: uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info"), daemon=True).start()
+    # threading.Thread(target=lambda: uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info"), daemon=True).start()
     # Run Streamlit UI
     run_streamlit_ui()
