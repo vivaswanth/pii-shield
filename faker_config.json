@@ -1,0 +1,12 @@
+{
+    "Name": {"faker": "name"},
+    "DOB": {"faker": "date", "format": "%B %d, %Y"},
+    "Address": {"faker": "address"},
+    "Phone": {"faker": "phone_number"},
+    "Email": {"faker": "email"},
+    "SSN": {"faker": "ssn"},    
+    "Member ID": {"faker": "bban"},
+    "Group Number": {"faker": "random_number", "min": 100000, "max": 999999},
+    "Date of Diagnosis": {"faker": "date", "format": "%B %d, %Y"},
+    "Physician": {"faker": "name_with_title"}
+}

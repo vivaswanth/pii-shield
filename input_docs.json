@@ -1,0 +1,28 @@
+[
+  {
+    "Patient Information": {
+      "Name": "Carlos E. Rodriguez",
+      "DOB": "June 22, 1967",
+      "Gender": "Male",
+      "Ethnicity": "Hispanic",
+      "Address": "1442 Palm Tree Blvd, Miami, FL 33176",
+      "Phone": "(786) 555-9312",
+      "Email": "carlos.rodriguez67@example.com",
+      "SSN": "312-56-7723"
+    },
+    "Insurance Information": {
+      "Provider": "Humana",
+      "Plan": "Humana Medicare Advantage PPO",
+      "Member ID": "HUM99384710",
+      "Group Number": "730193",
+      "Payer ID": "61101"
+    },
+    "Medical Details": {
+      "Primary Diagnosis": "Chronic Obstructive Pulmonary Disease (COPD)",
+      "ICD-10 Code": "J44.9",
+      "Date of Diagnosis": "February 10, 2025",
+      "Physician": "Dr. Amanda Lee, DO (NPI: 1765092039)",
+      "Facility": "Jackson Memorial Hospital"
+    }
+  }
+]

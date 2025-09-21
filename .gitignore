@@ -205,3 +205,11 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+redacted_pan_samples
+redacted_pan_samples.zip
+synthetic_pan_samples
+synthetic_pan_samples.zip
+synthetic_pan_samples_latest
+synthetic_pan_samples_latest.zip
+final_outputs.zip
