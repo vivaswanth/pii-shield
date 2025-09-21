@@ -199,25 +199,25 @@ def redact_json_with_faker_config(data, config):
     return redacted_data, redacted_fields
 
 # ---------------- FastAPI Backend ----------------
-app = FastAPI(title="PII Shield API")
+# app = FastAPI(title="PII Shield API")
 
-@app.post("/redact/image")
-async def api_redact_image(file: UploadFile = File(...), conf_threshold: int = Form(30), mode: str = Form("Smart (labels + patterns)")):
-    contents = await file.read()
-    image = Image.open(io.BytesIO(contents)).convert("RGB")
-    _, redacted_cv, redacted_fields, _ = process_and_redact_image(image, conf_threshold, mode)
-    out_bytes = cv2.imencode('.jpg', redacted_cv)[1].tobytes()
-    tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
-    tmp_file.write(out_bytes)
-    tmp_file.close()
-    return FileResponse(tmp_file.name, media_type="image/jpeg", filename="redacted.jpg")
+# @app.post("/redact/image")
+# async def api_redact_image(file: UploadFile = File(...), conf_threshold: int = Form(30), mode: str = Form("Smart (labels + patterns)")):
+#     contents = await file.read()
+#     image = Image.open(io.BytesIO(contents)).convert("RGB")
+#     _, redacted_cv, redacted_fields, _ = process_and_redact_image(image, conf_threshold, mode)
+#     out_bytes = cv2.imencode('.jpg', redacted_cv)[1].tobytes()
+#     tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+#     tmp_file.write(out_bytes)
+#     tmp_file.close()
+#     return FileResponse(tmp_file.name, media_type="image/jpeg", filename="redacted.jpg")
 
-@app.post("/redact/json")
-async def api_redact_json(file: UploadFile = File(...), config_file: UploadFile = File(None)):
-    data = json.load(file.file)
-    faker_config = json.load(config_file.file) if config_file else {}
-    redacted_json, redacted_fields = redact_json_with_faker_config(data, faker_config)
-    return JSONResponse(content={"redacted_json": redacted_json, "redacted_fields": redacted_fields})
+# @app.post("/redact/json")
+# async def api_redact_json(file: UploadFile = File(...), config_file: UploadFile = File(None)):
+#     data = json.load(file.file)
+#     faker_config = json.load(config_file.file) if config_file else {}
+#     redacted_json, redacted_fields = redact_json_with_faker_config(data, faker_config)
+#     return JSONResponse(content={"redacted_json": redacted_json, "redacted_fields": redacted_fields})
 
 # ---------------- Streamlit UI ----------------
 def run_streamlit_ui():
