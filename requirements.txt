@@ -4,4 +4,11 @@ scipy
 matplotlib
 pillow
 opencv-python
+opencv-python-headless
 jupyter
+streamlit
+easyocr
+pytesseract
+pdf2image
+faker
+requests
