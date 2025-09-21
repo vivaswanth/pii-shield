@@ -11,4 +11,6 @@ easyocr
 pytesseract
 pdf2image
 faker
+fastapi
+uvicorn
 requests

@@ -1,4 +1,4 @@
-# pii_shield.py
+# app.py
 import streamlit as st
 import tempfile
 import os
@@ -10,28 +10,15 @@ from PIL import Image
 from pdf2image import convert_from_bytes
 import pytesseract
 import easyocr
-import requests
 from faker import Faker
 import io
 import zipfile
+from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.responses import JSONResponse, FileResponse
+import uvicorn
+import threading
 
-# ---------------- Streamlit Page ----------------
-st.set_page_config(page_title="PII Shield", page_icon="🛡️", layout="centered")
-st.markdown("<h1 style='text-align: center;'>🛡️ PII Shield</h1>", unsafe_allow_html=True)
-st.markdown(
-    "<div style='text-align:center;font-size: 1.1rem;'>"
-    "Upload an image, PDF, or JSON file containing PII.<br/>"
-    "<i>Select a suitable redaction mode and threshold. Download your safe, redacted version.</i>"
-    "</div>",
-    unsafe_allow_html=True,
-)
-
-# ---------------- Settings ----------------
-mode = st.radio("Redaction mode", ["Smart (labels + patterns)", "Aggressive (all text blocks)"])
-conf_threshold = st.slider("OCR confidence threshold", 0, 100, 30)
-show_debug = st.checkbox("Show debug boxes/labels (dev)", False)
-
-# ---------------- Regex & Keywords ----------------
+# ---------------- Global Setup ----------------
 REGEX_PATTERNS = {
     "pan": re.compile(r"\b[A-Z]{5}[0-9]{4}[A-Z]\b", re.IGNORECASE),
     "aadhaar": re.compile(r"\b[2-9]{1}[0-9]{3}\s*[0-9]{4}\s*[0-9]{4}\b"),
@@ -53,9 +40,6 @@ reader = easyocr.Reader(['en'], gpu=False)
 faker = Faker('en_IN')
 
 # ---------------- Utilities ----------------
-def section_block(title):
-    st.markdown(f"<div style='margin: 2em 0 0.5em 0;'><b>{title}</b></div>", unsafe_allow_html=True)
-
 def create_zip_from_images(images, ext=".jpg"):
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zf:
@@ -65,7 +49,6 @@ def create_zip_from_images(images, ext=".jpg"):
     zip_buffer.seek(0)
     return zip_buffer.read()
 
-# ---------------- OCR & Image Redaction ----------------
 def redact_faces(image):
     img = image.copy()
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -145,24 +128,23 @@ def get_ocr_from_pillow(img_pil):
     data = pytesseract.image_to_data(img_cv, output_type=pytesseract.Output.DICT, lang="eng")
     return img_cv, data
 
-def process_and_redact_image(image_pil):
+def process_and_redact_image(image_pil, conf_threshold=30, mode="Smart (labels + patterns)"):
     img_cv, ocr_data = get_ocr_from_pillow(image_pil)
     img_redacted, redacted_fields = redact_image(img_cv, ocr_data, conf_threshold, mode)
     return img_cv, img_redacted, redacted_fields, ocr_data
 
-def handle_pdf(uploaded_bytes):
+def handle_pdf(uploaded_bytes, conf_threshold=30, mode="Smart (labels + patterns)"):
     pdf_images = convert_from_bytes(uploaded_bytes)
     all_pages_original = []
     all_pages_redacted = []
     all_redacted_fields = []
     for page in pdf_images:
-        orig, redacted, redacted_fields, _ = process_and_redact_image(page)
+        orig, redacted, redacted_fields, _ = process_and_redact_image(page, conf_threshold, mode)
         all_pages_original.append(orig)
         all_pages_redacted.append(redacted)
         all_redacted_fields.extend(redacted_fields)
     return all_pages_original, all_pages_redacted, all_redacted_fields
 
-# ---------------- JSON Redaction with Faker ----------------
 def apply_faker_rule(rule):
     ftype = rule.get("faker", "mask")
     if ftype == "mask":
@@ -197,18 +179,15 @@ def redact_json_with_faker_config(data, config):
         if isinstance(obj, dict):
             out = {}
             for k, v in obj.items():
-                # Check if this key matches any config key (case-insensitive)
                 matched_rule = None
                 for cfg_key, cfg_rule in config.items():
                     if k.lower() == cfg_key.lower():
                         matched_rule = cfg_rule
                         break
-
                 if matched_rule:
                     out[k] = apply_faker_rule(matched_rule)
                     redacted_fields.append(k)
                 else:
-                    # Recurse into nested dict/list
                     out[k] = _redact(v)
             return out
         elif isinstance(obj, list):
@@ -219,112 +198,100 @@ def redact_json_with_faker_config(data, config):
     redacted_data = _redact(data)
     return redacted_data, redacted_fields
 
+# ---------------- FastAPI Backend ----------------
+app = FastAPI(title="PII Shield API")
 
+@app.post("/redact/image")
+async def api_redact_image(file: UploadFile = File(...), conf_threshold: int = Form(30), mode: str = Form("Smart (labels + patterns)")):
+    contents = await file.read()
+    image = Image.open(io.BytesIO(contents)).convert("RGB")
+    _, redacted_cv, redacted_fields, _ = process_and_redact_image(image, conf_threshold, mode)
+    out_bytes = cv2.imencode('.jpg', redacted_cv)[1].tobytes()
+    tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+    tmp_file.write(out_bytes)
+    tmp_file.close()
+    return FileResponse(tmp_file.name, media_type="image/jpeg", filename="redacted.jpg")
 
-# ---------------- Main Streamlit Flow ----------------
-uploaded_file = st.file_uploader(
-    "Upload image (PAN/Aadhaar), PDF, or JSON",
-    type=["jpg", "jpeg", "png", "pdf", "json"],
-    accept_multiple_files=False,
-)
+@app.post("/redact/json")
+async def api_redact_json(file: UploadFile = File(...), config_file: UploadFile = File(None)):
+    data = json.load(file.file)
+    faker_config = json.load(config_file.file) if config_file else {}
+    redacted_json, redacted_fields = redact_json_with_faker_config(data, faker_config)
+    return JSONResponse(content={"redacted_json": redacted_json, "redacted_fields": redacted_fields})
 
-config_file = st.file_uploader("Optional: Upload Faker config JSON", type=["json"], key="config")
-faker_config = json.load(config_file) if config_file else {}
-
-api_url = st.text_input("Or enter API URL to fetch JSON")
-
-if uploaded_file or api_url:
-    with st.spinner("Processing..."):
-        redacted_fields_total = []
-
-        # ---------------- Image ----------------
+# ---------------- Streamlit UI ----------------
+def run_streamlit_ui():
+    st.set_page_config(page_title="PII Shield", page_icon="🛡️", layout="centered")
+    st.header("🛡️ PII Shield")
+    st.markdown(
+    "<div style='text-align:left;font-size: 1rem;'>"
+    "Upload an image, PDF, or JSON file containing PII.<br/>"
+    "Select a suitable redaction mode and threshold in settings tab. Download your safe, redacted version."
+    "</div>",
+    unsafe_allow_html=True)
+    st.markdown("<hr>", unsafe_allow_html=True)
+    
+    # Sidebar Tabs
+    st.sidebar.title("PII Shield Options")
+    tab = st.sidebar.radio("Select tab", ["Image/PDF", "JSON", "Settings"])
+    
+    if tab == "Settings":
+        st.header("Settings")
+        conf_threshold = st.slider("OCR confidence threshold", 0, 100, 30)
+        mode = st.radio("Redaction mode", ["Smart (labels + patterns)", "Aggressive (all text blocks)"])
+        show_debug = st.checkbox("Show debug boxes/labels (dev)", False)
+        st.session_state.update({"conf_threshold": conf_threshold, "mode": mode, "show_debug": show_debug})
+    
+    else:
+        conf_threshold = st.session_state.get("conf_threshold", 30)
+        mode = st.session_state.get("mode", "Smart (labels + patterns)")
+        show_debug = st.session_state.get("show_debug", False)
+        
+        uploaded_file = st.file_uploader("Upload file", type=["jpg","jpeg","png","pdf","json"])
+        config_file = st.file_uploader("Optional: Faker Config JSON", type=["json"])
+        faker_config = json.load(config_file) if config_file else {}
+        
         if uploaded_file:
             name, ext = os.path.splitext(uploaded_file.name.lower())
             if ext in [".jpg", ".jpeg", ".png"]:
                 image = Image.open(uploaded_file).convert("RGB")
-                orig_cv, redacted_cv, redacted_fields, ocr_data = process_and_redact_image(image)
-
-                tab_orig, tab_red = st.tabs(["Original", "Redacted"])
-                with tab_orig:
-                    st.image(cv2.cvtColor(orig_cv, cv2.COLOR_BGR2RGB), use_column_width=True)
-                with tab_red:
-                    st.image(cv2.cvtColor(redacted_cv, cv2.COLOR_BGR2RGB), use_column_width=True)
-                    st.download_button(
-                        "Download redacted image",
-                        data=cv2.imencode('.jpg', redacted_cv)[1].tobytes(),
-                        file_name="redacted.jpg",
-                        mime="image/jpeg"
-                    )
+                orig_cv, redacted_cv, redacted_fields, ocr_data = process_and_redact_image(image, conf_threshold, mode)
+                st.subheader("Original Image")
+                st.image(cv2.cvtColor(orig_cv, cv2.COLOR_BGR2RGB), use_container_width=True)
+                st.subheader("Redacted Image")
+                st.image(cv2.cvtColor(redacted_cv, cv2.COLOR_BGR2RGB), use_container_width=True)
+                st.download_button("Download Redacted Image", cv2.imencode('.jpg', redacted_cv)[1].tobytes(), "redacted.jpg")
                 if show_debug:
-                    section_block("Debug OCR")
+                    st.subheader("Debug OCR")
                     st.image(cv2.cvtColor(draw_debug_boxes(orig_cv, ocr_data, conf_threshold), cv2.COLOR_BGR2RGB))
-
-                redacted_fields_total.extend(redacted_fields)
-
-            # ---------------- PDF ----------------
+            
             elif ext == ".pdf":
-                orig_imgs, redact_imgs, redacted_fields = handle_pdf(uploaded_file.read())
+                orig_imgs, redact_imgs, redacted_fields = handle_pdf(uploaded_file.read(), conf_threshold, mode)
                 for idx, (orig, redacted) in enumerate(zip(orig_imgs, redact_imgs)):
-                    tab_orig, tab_red = st.tabs([f"Page {idx+1} Original", f"Page {idx+1} Redacted"])
-                    with tab_orig:
-                        st.image(cv2.cvtColor(orig, cv2.COLOR_BGR2RGB), use_column_width=True)
-                    with tab_red:
-                        st.image(cv2.cvtColor(redacted, cv2.COLOR_BGR2RGB), use_column_width=True)
-                st.download_button(
-                    "Download all redacted pages as ZIP",
-                    data=create_zip_from_images(redact_imgs),
-                    file_name="redacted_pages.zip",
-                    mime="application/zip"
-                )
-                redacted_fields_total.extend(redacted_fields)
-
-            # ---------------- JSON ----------------
+                    st.subheader(f"Page {idx+1} Original")
+                    st.image(cv2.cvtColor(orig, cv2.COLOR_BGR2RGB), use_container_width=True)
+                    st.subheader(f"Page {idx+1} Redacted")
+                    st.image(cv2.cvtColor(redacted, cv2.COLOR_BGR2RGB), use_container_width=True)
+                st.download_button("Download ZIP", create_zip_from_images(redact_imgs), "redacted_pages.zip")
+            
             elif ext == ".json":
-                jdata = json.load(uploaded_file)
-                redacted_json, redacted_fields = redact_json_with_faker_config(jdata, faker_config)
+                data = json.load(uploaded_file)
+                redacted_json, redacted_fields = redact_json_with_faker_config(data, faker_config)
                 st.subheader("Original JSON")
-                st.json(jdata, expanded=True)
+                st.json(data, expanded=True)
                 st.subheader("Redacted JSON")
                 st.json(redacted_json, expanded=True)
-                st.download_button(
-                    "Download redacted JSON",
-                    data=json.dumps(redacted_json, indent=2),
-                    file_name="redacted.json",
-                    mime="application/json"
-                )
-                redacted_fields_total.extend(redacted_fields)
+                st.download_button("Download Redacted JSON", json.dumps(redacted_json, indent=2), "redacted.json")
+    
+    st.markdown(
+        "<div style='text-align: center; color: #666; font-size: 0.9em;'>"
+        "PII Shield &copy; 2025. Open Source. <br>Secure, offline, no data stored."
+        "</div>", unsafe_allow_html=True
+    )
 
-        # ---------------- API JSON ----------------
-        if api_url:
-            try:
-                resp = requests.get(api_url)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    redacted_api_json, redacted_fields = redact_json_with_faker_config(data, faker_config)
-                    st.subheader("API JSON (Original)")
-                    st.json(data, expanded=True)
-                    st.subheader("API JSON (Redacted)")
-                    st.json(redacted_api_json, expanded=True)
-                    st.download_button(
-                        "Download API redacted JSON",
-                        data=json.dumps(redacted_api_json, indent=2),
-                        file_name="api_redacted.json",
-                        mime="application/json"
-                    )
-                    redacted_fields_total.extend(redacted_fields)
-                else:
-                    st.error(f"API returned status code {resp.status_code}")
-            except Exception as e:
-                st.error(f"Failed to fetch API JSON: {e}")
-
-        # ---------------- Redacted Fields ----------------
-        if redacted_fields_total:
-            section_block("Redacted Fields")
-            st.write(redacted_fields_total)
-
-st.markdown("<hr>", unsafe_allow_html=True)
-st.markdown(
-    "<div style='text-align: center; color: #666; font-size: 0.9em;'>"
-    "PII Shield &copy; 2025. Open Source. <br>Secure, offline, no data stored."
-    "</div>", unsafe_allow_html=True
-)
+# ---------------- Run ----------------
+if __name__ == "__main__":
+    # Run FastAPI in a separate thread
+    threading.Thread(target=lambda: uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info"), daemon=True).start()
+    # Run Streamlit UI
+    run_streamlit_ui()
